@@ -149,29 +149,29 @@ def generate_heatmaps(out_dir):
     print("Generating Black-and-White Heatmaps...")
     d_range = np.linspace(100, 5000, 100)
     h_range = np.linspace(500, 10000, 100)
-    D_mesh, H_mesh = np.meshgrid(d_range, h_range)
+    d_mesh, h_mesh = np.meshgrid(d_range, h_range)
 
-    N_opt_map = np.zeros_like(D_mesh)
-    C_map = np.zeros_like(D_mesh)
-    R_map = np.zeros_like(D_mesh)
+    n_opt_map = np.zeros_like(d_mesh)
+    c_map = np.zeros_like(d_mesh)
+    r_map = np.zeros_like(d_mesh)
 
-    for i in range(D_mesh.shape[0]):
-        for j in range(D_mesh.shape[1]):
-            n, c, r = calculate_metrics(H_mesh[i, j], D_mesh[i, j])
-            N_opt_map[i, j] = n
-            C_map[i, j] = c
-            R_map[i, j] = r
+    for i in range(d_mesh.shape[0]):
+        for j in range(d_mesh.shape[1]):
+            n, c, r = calculate_metrics(h_mesh[i, j], d_mesh[i, j])
+            n_opt_map[i, j] = n
+            c_map[i, j] = c
+            r_map[i, j] = r
 
     maps = [
-        (N_opt_map, r'Log$_{10}$ [ Minimum Satellites Required ($N_{opt}$) ]', 'heatmap_N_opt.png'),
-        (C_map, r'Log$_{10}$ [ Cost-Efficiency ($C$) ]', 'heatmap_C.png'),
-        (R_map, r'Log$_{10}$ [ Average Entanglement Rate ($R$) ]', 'heatmap_R.png')
+        (n_opt_map, r'Log$_{10}$ [ Minimum Satellites Required ($N_{opt}$) ]', 'heatmap_N_opt.png'),
+        (c_map, r'Log$_{10}$ [ Cost-Efficiency ($C$) ]', 'heatmap_C.png'),
+        (r_map, r'Log$_{10}$ [ Average Entanglement Rate ($R$) ]', 'heatmap_R.png')
     ]
 
     for raw_data, title, filename in maps:
         log_data = np.log10(np.where(raw_data > 0, raw_data, np.nan))
         filepath = os.path.join(out_dir, filename)
-        plot_bw_heatmap(D_mesh, H_mesh, log_data, title, filepath)
+        plot_bw_heatmap(d_mesh, h_mesh, log_data, title, filepath)
 
 
 def main():
