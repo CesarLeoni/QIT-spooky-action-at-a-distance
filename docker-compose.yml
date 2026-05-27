@@ -1,0 +1,8 @@
+version: '3.8'
+
+services:
+  quantum_sim:
+    build: .  # Added missing space
+    volumes:
+      # Mounts the container's output directory to a local "output" folder
+      - ./output:/app/output  # Added missing space
