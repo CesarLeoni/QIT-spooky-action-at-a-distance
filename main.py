@@ -4,6 +4,8 @@ matplotlib.use('Agg')  # Required for headless execution in Docker
 import matplotlib.pyplot as plt
 import os
 import warnings
+import copy
+
 
 # Suppress expected numpy warnings when masking invalid orbital parameters
 warnings.filterwarnings("ignore", category=RuntimeWarning)
@@ -19,6 +21,9 @@ w0 = 0.025  # Initial Gaussian beam waist (m)
 r_rec = 0.75  # Receiver telescope radius (m)
 eta_atm_zen = 0.5  # Baseline atmospheric transmittance at zenith
 elevation_cutoff = np.radians(10)  # Minimum elevation to avoid heavy atmospheric noise
+MIN_TRANSMITTANCE = 1e-9  # Equivalent to the 90 dB maximum optical loss limit
+ORBITAL_STEPS = 5000      # Number of discretization steps for the satellite pass
+
 
 def calculate_metrics(h, d):
     """
@@ -38,12 +43,9 @@ def calculate_metrics(h, d):
     if d_ang >= 2 * theta_cov:
         return np.nan, np.nan, np.nan  # Geometric failure: cannot see both stations
 
-    # Approximate N_opt for continuous coverage
-    N_opt = np.ceil(8.0 / (theta_cov - d_ang / 2) ** 2)
-
-    # Vectorized integration over the satellite pass
-    phi_max = theta_cov - d_ang / 2
-    phis = np.linspace(-phi_max, phi_max, 200)
+    # Geometric integration over the satellite pass
+    phi_max_geo = theta_cov - d_ang / 2
+    phis = np.linspace(-phi_max_geo, phi_max_geo, ORBITAL_STEPS)
 
     # Instantaneous angular distances
     cos_theta_1 = np.cos(phis - d_ang / 2)
@@ -70,14 +72,32 @@ def calculate_metrics(h, d):
     eta_fs_1 = 1 - np.exp(-2 * r_rec ** 2 / W_L1 ** 2)
     eta_fs_2 = 1 - np.exp(-2 * r_rec ** 2 / W_L2 ** 2)
 
-    # Compute instantaneous successful heralding rate
-    rate_inst = R_source * (eta_fs_1 * eta_atm_1 * eta_fs_2 * eta_atm_2)
+    # 1. Calculate total optical transmittance
+    eta_tot = eta_fs_1 * eta_atm_1 * eta_fs_2 * eta_atm_2
+
+    valid_indices = np.where(eta_tot >= MIN_TRANSMITTANCE)[0]
+
+    # 3. If no positions are valid, the satellite is optically useless
+    if len(valid_indices) == 0:
+        return np.nan, np.nan, np.nan
+
+        # 4. Shrink the coverage footprint to ONLY the valid optical range
+    effective_phi_max = np.max(np.abs(phis[valid_indices]))
+
+    # Prevent division by zero if the valid window is microscopic
+    if effective_phi_max < 1e-6:
+        return np.nan, np.nan, np.nan
+
+    # 5. Calculate N_opt using the new, optically-restricted footprint!
+    N_opt = np.ceil(8.0 / (effective_phi_max) ** 2)
+
+    # Compute instantaneous successful heralding rate only for valid positions
+    rate_inst = R_source * eta_tot[valid_indices]
 
     avg_rate = np.mean(rate_inst)
     C = avg_rate / N_opt
 
     return N_opt, C, avg_rate
-
 
 # =====================================================================
 # Phase 1: Reproduce Separated 1D Profile Plots
@@ -97,11 +117,11 @@ for d in distances:
         rs.append(r)
     all_data.append((d, n_opts, cs, rs))
 
-# Plot configurations
+# Plot configurations with descriptive titles
 plot_configs = [
-    (0, r'Optimal Satellites ($N_{opt}$)', 'Count', '1D_N_opt.png'),
-    (1, r'Figure of Merit $C(h,d)$', 'ebits/s/sat', '1D_C_hd.png'),
-    (2, r'Rate $R$ (ebits/s)', 'ebits/s', '1D_Rate.png')
+    (0, r'Minimum Satellites for Continuous Coverage ($N_{opt}$)', 'Satellites Needed', '1D_N_opt.png'),
+    (1, r'Cost-Efficiency: Entanglement Rate per Satellite ($C$)', 'ebits/s/sat', '1D_C_hd.png'),
+    (2, r'Average Entanglement Distribution Rate ($R$)', 'ebits/s', '1D_Rate.png')
 ]
 
 # Generate a separate file for each figure of merit
@@ -140,20 +160,44 @@ for i in range(D_mesh.shape[0]):
         C_map[i, j] = c
         R_map[i, j] = r
 
+import copy
+
+
 def plot_bw_heatmap(data, title, filename):
-    plt.figure(figsize=(8, 6))
-    # 'gray' colormap fulfills the black-and-white assignment constraint
-    plt.pcolormesh(D_mesh, H_mesh, data, cmap='gray', shading='auto')
+    # Made the figure slightly taller to comfortably fit the text
+    plt.figure(figsize=(8, 6.5))
+
+    # Grab the grayscale colormap and explicitly set 'bad' (NaN) values to faint pink
+    cmap = copy.copy(plt.get_cmap('gray'))
+    cmap.set_bad(color='#ffcccc')
+
+    plt.pcolormesh(D_mesh, H_mesh, data, cmap=cmap, shading='auto')
     plt.colorbar(label=title)
+
     plt.xlabel('Ground Distance d (km)')
     plt.ylabel('Altitude h (km)')
     plt.title(title)
-    plt.savefig(f'output/{filename}', dpi=300)
+
+    # --- NEW: Add the explanatory note ---
+    note = ("Note: The pink region represents configurations where continuous coverage is\n"
+            "geometrically impossible or optical loss exceeds the 90 dB threshold.")
+
+    # Place text at the bottom center (x=0.5, y=-0.05 relative to the figure)
+    plt.figtext(0.5, -0.05, note, ha='center', fontsize=9, style='italic', color='#444444')
+
+    # bbox_inches='tight' is crucial here! It forces Matplotlib to expand
+    # the saved image borders to include the text we just placed outside the main plot.
+    plt.savefig(f'output/{filename}', dpi=300, bbox_inches='tight')
     plt.close()
 
-# Masking invalid values and applying log10 scaling for steep physical gradients
-plot_bw_heatmap(np.log10(np.where(N_opt_map > 0, N_opt_map, np.nan)), r'Log$_{10}$ $N_{opt}$', 'heatmap_N_opt.png')
-plot_bw_heatmap(np.log10(np.where(C_map > 0, C_map, np.nan)), r'Log$_{10}$ $C(h,d)$', 'heatmap_C.png')
-plot_bw_heatmap(np.log10(np.where(R_map > 0, R_map, np.nan)), r'Log$_{10}$ $R$', 'heatmap_R.png')
 
+# Applying descriptive titles to the heatmaps (keeping the Log10 note for mathematical accuracy)
+plot_bw_heatmap(np.log10(np.where(N_opt_map > 0, N_opt_map, np.nan)),
+                r'Log$_{10}$ [ Minimum Satellites Required ($N_{opt}$) ]', 'heatmap_N_opt.png')
+
+plot_bw_heatmap(np.log10(np.where(C_map > 0, C_map, np.nan)),
+                r'Log$_{10}$ [ Cost-Efficiency ($C$) ]', 'heatmap_C.png')
+
+plot_bw_heatmap(np.log10(np.where(R_map > 0, R_map, np.nan)),
+                r'Log$_{10}$ [ Average Entanglement Rate ($R$) ]', 'heatmap_R.png')
 print("Simulation complete. Plots saved to /output.")
